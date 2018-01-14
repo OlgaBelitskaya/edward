@@ -52,10 +52,46 @@ import os
 
 from datetime import datetime
 from edward.models import RandomVariable
-from edward.util import get_session, get_variables, Progbar
+from edward.util import get_variables, Progbar
 from edward.util import transform as _transform
 
-from tensorflow.contrib.distributions import bijectors
+tfb = tf.contrib.distributions.bijectors
+
+
+def call_function_up_to_args(f, *args, **kwargs):
+  import inspect
+  if hasattr(f, "_func"):  # make_template()
+    argspec = inspect.getargspec(f._func)
+  else:
+    argspec = inspect.getargspec(f)
+  num_kwargs = len(argspec.defaults) if argspec.defaults is not None else 0
+  num_args = len(argspec.args) - num_kwargs
+  if num_args > 0:
+    return f(args[:num_args], **kwargs)
+  elif num_kwargs > 0:
+    return f(**kwargs)
+  return f()
+
+
+def make_intercept(trace, align_data, align_latent, args, kwargs):
+  def _intercept(f, *fargs, **fkwargs):
+    """Set model's sample values to variational distribution's and data."""
+    name = fkwargs.get('name', None)
+    key = align_data(name)
+    if isinstance(key, int):
+      fkwargs['value'] = args[key]
+    elif kwargs.get(key, None) is not None:
+      fkwargs['value'] = kwargs.get(key)
+    else:
+      qz = trace[align_latent(name)].value
+      fkwargs['value'] = qz.value
+    # if auto_transform and 'qz' in locals():
+    #   # TODO for generation to work, must output original dist. to
+    #   keep around TD? must maintain another stack to write to as a
+    #   side-effect (or augment the original stack).
+    #   return transform(f, qz, *fargs, **fkwargs)
+    return f(*fargs, **fkwargs)
+  return _intercept
 
 
 def check_and_maybe_build_data(data):
@@ -71,6 +107,7 @@ def check_and_maybe_build_data(data):
       prior latent variables (of type `RandomVariable`) to posterior
       latent variables (of type `RandomVariable`).
   """
+  # TODO get the local session
   sess = get_session()
   if data is None:
     data = {}
@@ -194,59 +231,30 @@ def check_and_maybe_build_var_list(var_list, latent_vars, data):
   return var_list
 
 
-def transform(latent_vars, auto_transform=True):
+def transform(f, qz, *args, **kwargs):
+  """Transform prior -> unconstrained -> q's constraint.
+
+  When using in VI, we keep variational distribution on its original
+  space (for sake of implementing only one intercepting function).
   """
-  Args:
-    auto_transform: bool, optional.
-      Whether to automatically transform continuous latent variables
-      of unequal support to be on the unconstrained space. It is
-      only applied if the argument is `True`, the latent variable
-      pair are `ed.RandomVariable`s with the `support` attribute,
-      the supports are both continuous and unequal.
-  """
-  # map from original latent vars to unconstrained versions
-  if auto_transform:
-    latent_vars_temp = latent_vars.copy()
-    # latent_vars maps original latent vars to constrained Q's.
-    # latent_vars_unconstrained maps unconstrained vars to unconstrained Q's.
-    latent_vars = {}
-    latent_vars_unconstrained = {}
-    for z, qz in six.iteritems(latent_vars_temp):
-      if hasattr(z, 'support') and hasattr(qz, 'support') and \
-            z.support != qz.support and qz.support != 'point':
-
-        # transform z to an unconstrained space
-        z_unconstrained = _transform(z)
-
-        # make sure we also have a qz that covers the unconstrained space
-        if qz.support == "points":
-          qz_unconstrained = qz
-        else:
-          qz_unconstrained = _transform(qz)
-        latent_vars_unconstrained[z_unconstrained] = qz_unconstrained
-
-        # additionally construct the transformation of qz
-        # back into the original constrained space
-        if z_unconstrained != z:
-          qz_constrained = _transform(
-            qz_unconstrained, bijectors.Invert(z_unconstrained.bijector))
-
-          try: # attempt to pushforward the params of Empirical distributions
-            qz_constrained.params = z_unconstrained.bijector.inverse(
-              qz_unconstrained.params)
-          except: # qz_unconstrained is not an Empirical distribution
-            pass
-
-        else:
-          qz_constrained = qz_unconstrained
-
-        latent_vars[z] = qz_constrained
-      else:
-        latent_vars[z] = qz
-        latent_vars_unconstrained[z] = qz
+  # TODO deal with f or qz being 'point' or 'points'
+  if (not hasattr(f, 'support') or not hasattr(qz, 'support') or
+      f.support == qz.support):
+    return f(*args, **kwargs)
+  value = kwargs.pop('value')
+  kwargs['value'] = 0.0  # to avoid sampling; TODO follow sample shape
+  rv = f(*args, **kwargs)
+  # Take shortcuts in logic if p or q are already unconstrained.
+  if qz.support in ('real', 'multivariate_real'):
+    return _transform(rv, value=value)
+  if rv.support in ('real', 'multivariate_real'):
+    rv_unconstrained = rv
   else:
-    latent_vars_unconstrained = None
-  return latent_vars, latent_vars_unconstrained
+    rv_unconstrained = _transform(rv, value=0.0)
+  unconstrained_to_constrained = tfb.Invert(_transform(qz).bijector)
+  return _transform(rv_unconstrained,
+                    unconstrained_to_constrained,
+                    value=value)
 
 
 def summary_variables(latent_vars=None, data=None, variables=None,

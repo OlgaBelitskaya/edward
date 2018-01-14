@@ -6,9 +6,7 @@ import six
 import tensorflow as tf
 
 from edward.inferences.map import map
-from edward.models import PointMass, RandomVariable
 from edward.util import get_variables
-from edward.util import copy, transform
 
 try:
   from edward.models import \
@@ -17,8 +15,8 @@ except Exception as e:
   raise ImportError("{0}. Your TensorFlow version is not supported.".format(e))
 
 
-def laplace(latent_vars=None, data=None,
-            auto_transform=True, scale=None, var_list=None, collections=None):
+def laplace(model, variational, align_latent, align_data,
+            scale=None, auto_transform=True, collections=None, *args, **kwargs):
   """Laplace approximation [@laplace1986memoir].
 
   It approximates the posterior distribution using a multivariate
@@ -75,32 +73,8 @@ def laplace(latent_vars=None, data=None,
       variable must be a `MultivariateNormalDiag`,
       `MultivariateNormalTriL`, or `Normal` random variable.
   """
-  if isinstance(latent_vars, list):
-    with tf.variable_scope(None, default_name="posterior"):
-      latent_vars_dict = {}
-      for z in latent_vars:
-        # Define location to have constrained support and
-        # unconstrained free parameters.
-        batch_event_shape = z.batch_shape.concatenate(z.event_shape)
-        loc = tf.Variable(tf.random_normal(batch_event_shape))
-        if hasattr(z, 'support'):
-          z_transform = transform(z)
-          if hasattr(z_transform, 'bijector'):
-            loc = z_transform.bijector.inverse(loc)
-        scale_tril = tf.Variable(tf.random_normal(
-            batch_event_shape.concatenate(batch_event_shape[-1])))
-        qz = MultivariateNormalTriL(loc=loc, scale_tril=scale_tril)
-        latent_vars_dict[z] = qz
-      latent_vars = latent_vars_dict
-      del latent_vars_dict
-  elif isinstance(latent_vars, dict):
-    for qz in six.itervalues(latent_vars):
-      if not isinstance(
-              qz, (MultivariateNormalDiag, MultivariateNormalTriL, Normal)):
-        raise TypeError("Posterior approximation must consist of only "
-                        "MultivariateNormalDiag, MultivariateTriL, or "
-                        "Normal random variables.")
-
+  # TODO build program runnin variational but replacing with point
+  # masses (or just call mean() for value)
   # Store latent variables in a temporary object; MAP will
   # optimize `PointMass` random variables, which subsequently
   # optimizes location parameters of the normal approximations.
@@ -108,9 +82,9 @@ def laplace(latent_vars=None, data=None,
   latent_vars = {z: PointMass(params=qz.loc)
                  for z, qz in six.iteritems(latent_vars_normal)}
 
-  loss, grads_and_vars = map(
-      latent_vars, data,
-      auto_transform, scale, var_list, collections)
+  loss = map(model, variational, align_latent, align_data,
+             scale, auto_transform, collections, *args, **kwargs)
+  # TODO
   def _finalize(loss, latent_vars, latent_vars_normal):
     """Function to call after convergence.
 
@@ -130,4 +104,4 @@ def laplace(latent_vars=None, data=None,
       finalize_ops.append(scale_var.assign(scale))
     return tf.group(*finalize_ops)
   finalize_op = _finalize(loss, latent_vars, latent_vars_normal)
-  return loss, grads_and_vars, finalize_op
+  return loss, finalize_op

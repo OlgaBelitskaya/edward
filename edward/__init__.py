@@ -17,13 +17,9 @@ from edward.inferences import (
     implicit_klqp,
     klpq,
     klqp,
-    reparameterization_klqp,
-    reparameterization_kl_klqp,
-    reparameterization_entropy_klqp,
-    score_klqp,
-    score_kl_klqp,
-    score_entropy_klqp,
-    score_rb_klqp,
+    klqp_reparameterization,
+    klqp_reparameterization_kl,
+    klqp_score,
     laplace,
     map,
     wake_sleep,
@@ -31,7 +27,7 @@ from edward.inferences import (
     )
 # from edward.inferences import MonteCarlo, HMC, MetropolisHastings, SGLD, SGHMC, Gibbs
 from edward.models import RandomVariable, Trace
-from edward.util import copy, dot, \
+from edward.util import dot, \
     get_ancestors, get_blanket, get_children, get_control_variate_coef, \
     get_descendants, get_parents, get_siblings, get_variables, \
     is_independent, Progbar, random_variables, rbf, \
@@ -61,13 +57,9 @@ _allowed_symbols = [
     'SGHMC',
     'klpq',
     'klqp',
-    'reparameterization_klqp',
-    'reparameterization_kl_klqp',
-    'reparameterization_entropy_klqp',
-    'score_klqp',
-    'score_kl_klqp',
-    'score_entropy_klqp',
-    'score_rb_klqp',
+    'klqp_reparameterization',
+    'klqp_reparameterization_kl',
+    'klqp_score',
     'laplace',
     'map',
     'wake_sleep',
@@ -75,7 +67,6 @@ _allowed_symbols = [
     'Gibbs',
     'RandomVariable',
     'Trace',
-    'copy',
     'dot',
     'get_ancestors',
     'get_blanket',
